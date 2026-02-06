@@ -1,39 +1,229 @@
-# EveSyn: Enhancing Utility of Differentially Private Synthetic Data over Dynamic Database with Efficient Updates
+# Synthephus: High-Utility w-Event Private Synthetic Data Publishing via Adaptive Budget Allocation
 
 ## Introduction
 
-This code base contains two implementation examples of EveSyn, implemented with two state-of-the-art PGM-based data synthesis mechanisms based on graph model as the OriginalSyn function, which are the MWEM+PGM and AIM.
+This code base contains the implementation of **Synthephus**, a novel approach for generating high-utility differentially private synthetic data over streaming w-event databases with adaptive budget allocation. Synthephus extends state-of-the-art PGM-based (Probabilistic Graphical Model) data synthesis mechanisms to handle dynamic data streams while efficiently managing privacy budgets across timestamps.
+
+The repository includes two implementations based on different PGM synthesis mechanisms:
+- **Synthephus-AIM**: Based on the Adaptive and Iterative Mechanism (AIM)
+- **Synthephus-MWEM**: Based on the Multiplicative Weights Exponential Mechanism with PGM (MWEM+PGM)
 
 For more details on Private-PGM, please visit [Private-PGM](https://github.com/ryan112358/private-pgm).
 
-These files also have two additional dependencies: [Ektelo](https://github.com/ektelo/ektelo) and [autograd](https://github.com/HIPS/autograd).
+These implementations have additional dependencies: [Ektelo](https://github.com/ektelo/ektelo) and [autograd](https://github.com/HIPS/autograd).
 
-## File structure
+## Key Features
 
-* mechanisms - Contains EveSyn constructions which are modified for the original data synthesis of EveSyn.
-* evmechanisms - Contains EveSyn constructions for the updated data synthesis and some dataset utility tools.
-* data - Contains datasets, selected cliques produced in the original data synthesis, and preferred cliques.
-* src - Contains some dependencies of PGM-based mechanisms.
-* UDF - Contains example UDFs. 
-* EveSyn.py - Gives an example of how to organize an EveSyn experiment.
+- **Adaptive Budget Allocation**: Dynamically adjusts privacy budget allocation across timestamps based on model complexity growth patterns
+- **Sliding Window Privacy**: Implements w-event differential privacy over streaming data with efficient budget reclamation
+- **Quality Assurance Mechanism**: Includes automatic model quality comparison and rollback to prevent degradation
+- **Dual Implementation**: Provides both AIM-based and MWEM-based variants for different use cases
+- **Baseline Comparison**: Includes fixed-budget baseline implementations for performance evaluation
+
+## File Structure
+
+* **synp_mechanisms/** - Contains Synthephus implementations for streaming synthetic data generation
+  * `synthephus_aim.py` - Synthephus implementation based on AIM mechanism
+  * `synthephus_mwem_pgm.py` - Synthephus implementation based on MWEM+PGM mechanism
+* **mechanisms/** - Contains baseline and auxiliary mechanisms
+  * `adaptive_grid.py`, `aim.py`, `mst.py`, `mwem+pgm.py` - Base mechanism implementations
+  * `cdp2adp.py` - Concentrated differential privacy to approximate DP conversion utilities
+  * `gaussian+appgm.py`, `hdmm+appgm.py` - Additional mechanism variants
+* **src/** - Core dependencies and libraries
+  * **hdmm/** - High-Dimensional Matrix Mechanism utilities
+  * **mbi/** - Marginal-based inference framework for PGM operations
+* **examples/** - Example scripts and demonstration code
+  * `run_synthephus.py` - Main example runner for Synthephus
+  * `demo_stream/` - Sample timestamped data directory
+  * `demo_results/` - Output directory for synthesis results
+* **data/** - Contains datasets and domain specifications
+
+## Installation
+
+1. Ensure you have Python 3.7 or higher installed.
+
+2. Install the required dependencies:
+
+```bash
+pip install -r requirements.txt
+```
+
+3. Export the `src` directory to your Python path. For example, in PowerShell on Windows:
+
+```powershell
+$Env:PYTHONPATH += ";E:\Project\Synthephus_release\src"
+```
+
+Or on Linux/Mac:
+
+```bash
+export PYTHONPATH="${PYTHONPATH}:/path/to/Synthephus_release/src"
+```
 
 ## Usage
 
-1. Before we start, if you are only testing non-UDF parts, you could remove
-the ```pycopg2``` and ```sqlalchemy``` in the ```requirements.txt```. Moreover, when you are testing the UDF part in a Linux system like ```Ubuntu```, 
-you should check whether ```python-psycopg2``` and ```libpq-dev``` are installed, or you should use ```apt``` to get them before you solve the requirements.
+### Quick Start Example
 
-2. Solve the dependencies with ```requirements.txt```. Note that we only support Python 3. 
+The easiest way to get started is to use the provided example runner:
+
+```bash
+python examples/run_synthephus.py --timestamps 5 --window 3 --epsilon 3.0 --rounds 30
+```
+
+This will:
+1. Split a sample dataset into 5 timestamps
+2. Run Synthephus-MWEM with a sliding window of size 3
+3. Use a total privacy budget of ε=3.0
+4. Execute 30 MWEM rounds per timestamp
+
+### Parameter Reference
+
+- `--timestamps`: Number of timestamps to generate and process
+- `--window`: Sliding window size (w parameter for w-event DP)
+- `--epsilon`: Total privacy budget (ε)
+- `--rounds`: Number of mechanism iterations per timestamp (T parameter)
+- `--source_csv`: Path to source CSV file for creating sample data
+- `--domain_json`: Path to domain specification JSON file
+- `--workdir`: Working directory for temporary timestamp data
+- `--output_dir`: Output directory for results
+- `--run_baseline`: Flag to also run fixed-budget baseline for comparison
+
+### Running  Synthephus-AIM
+
+To use the AIM-based implementation directly:
+
+```python
+from synp_mechanisms.synthephus_aim import synthephus_aim
+
+result_path, log_path = synthephus_aim(
+    input_folder="path/to/timestamp/data",
+    epsilon=3.0,
+    w=3,
+    timestamp_exp=5,
+    domain_path="path/to/domain.json",
+    max_model_size_mb=80.0,
+    verbose=True,
+    output_dir="results"
+)
+```
+
+### Running Synthephus-MWEM
+
+To use the MWEM-based implementation directly:
+
+```python
+from synp_mechanisms.synthephus_mwem_pgm import synthephus_mwem_pgm
+
+result_path, log_path = synthephus_mwem_pgm(
+    input_folder="path/to/timestamp/data",
+    epsilon=3.0,
+    w=3,
+    timestamp_exp=5,
+    T=30,
+    domain_path="path/to/domain.json",
+    max_model_size_mb=25.0,
+    verbose=True,
+    output_dir="results"
+)
+```
+
+### Command Line Interface
+
+Both mechanisms can also be run directly from the command line:
+
+```bash
+# Synthephus-AIM
+python synp_mechanisms/synthephus_aim.py \
+    --input_folder data/stream \
+    --epsilon 3.0 \
+    --w 3 \
+    --timestamp_exp 5 \
+    --mode synthephus \
+    --verbose
+
+# Synthephus-MWEM
+python synp_mechanisms/synthephus_mwem_pgm.py \
+    --input_folder data/stream \
+    --epsilon 3.0 \
+    --w 3 \
+    --timestamp_exp 5 \
+    --T 30 \
+    --mode synthephus \
+    --verbose
+```
+
+Use `--mode baseline` to run the fixed-budget baseline instead.
+
+## Data Format
+
+### Input Data Files
+
+Each timestamp should be stored as a separate CSV file in the input folder:
+- `real_1.csv` - Data for timestamp 1
+- `real_2.csv` - Data for timestamp 2
+- ...
+- `real_T.csv` - Data for timestamp T
+
+### Domain Specification
+
+A `domain.json` file should be provided to specify attribute domains:
+
+```json
+{
+  "attribute1": 10,
+  "attribute2": 5,
+  "attribute3": 20
+}
+```
+
+Where the numbers indicate the domain size (number of possible values) for each attribute.
+
+## Output
+
+The algorithms generate CSV files containing:
+- `timestamp`: Current timestamp index
+- `allocated_budget`: Privacy budget allocated to this timestamp
+- `actual_consumed_budget`: Actual privacy budget consumed
+- `eps_remain`: Remaining privacy budget after this timestamp
+- `workload_error`: Marginal query error metric
+- `cliques_count`: Number of cliques in the synthesized graphical model
+
+Optional detailed logs (when `verbose=True`) provide per-iteration information including selected cliques, budget consumption, and model quality metrics.
+
+## Algorithm Overview
+
+### Adaptive Budget Allocation
+
+Synthephus employs a three-phase budget allocation strategy:
+
+1. **Phase A (Timestamp 1)**: Initialize with equal budget allocation
+2. **Phase B (Timestamps 2 to w)**: Adaptive allocation based on initial model growth
+3. **Phase C (Timestamps w+1 onwards)**: Full adaptive allocation with historical window analysis
+
+The key innovation is using model complexity (measured by clique set size) as a predictor for budget requirements, allowing more efficient budget utilization across the stream.
+
+### Quality Assurance
+
+Synthephus includes an automatic quality comparison mechanism:
+- Compares workload error of new model vs. previous model
+- Automatically rolls back to previous model if quality degrades
+- Reclaims unused budget when rollback occurs
+
+This ensures monotonic quality improvement throughout the data stream.
+
+## Citation
+
+If you use this code in your research, please cite:
 
 ```
-$ pip install -r requirements.txt
+[Citation information to be added]
 ```
-3. Export the ```src``` file to path. For example, in Windows, you may use:
-```
-$Env:PYTHONPATH += ";X:\EveSyn\src"
-```
-4. Run the mechanism in ```mechanisms``` for original data synthesis (OriginalSyn), then run the corresponding mechanism under ```evmechanisms```.
-The EveSyn.py also gives an example of how to organize a one-click experiment with ```config.json```.
 
-## UDF usage
-See ```README.md``` in ```/UDF```.
+## License
+
+[License information to be added]
+
+## Contact
+
+For questions or issues, please open an issue on the GitHub repository or contact the authors.
+

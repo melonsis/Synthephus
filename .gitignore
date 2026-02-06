@@ -1,0 +1,11 @@
+data/*
+venv/*
+.venv/*
+__pycache__/
+*.py[cod]
+*$py.class
+uv.lock
+results/*
+pyproject.toml
+*/.env
+test_config.json
