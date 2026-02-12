@@ -26,7 +26,7 @@ from mechanisms.cdp2adp import cdp_rho
 from scipy import sparse
 from scipy.special import softmax
 
-"""Synthephus streaming synthesis implementation based on MWEM+PGM."""
+"""Synthephus streaming synthesis implementation based on mwem+pgm."""
 
 
 # =============================
@@ -47,7 +47,7 @@ def _worst_approximated(
     penalty: bool = True,
     bounded: bool = False,
 ) -> Tuple[str, ...]:
-    """Exponential mechanism to select the clique with the largest error for MWEM iteration."""
+    """Exponential mechanism to select the clique with the worst approximation error, used in MWEM iteration."""
 
     candidate_list = list(workload)
     errors = np.array([])
@@ -65,7 +65,7 @@ def _worst_approximated(
 def _compute_workload_error(
     data: Dataset, est: GraphicalModel, workload: Iterable[Tuple[str, ...]]
 ) -> float:
-    """Calculate workload error, reusing the original MWEM+PGM evaluation method."""
+    """Compute workload error using the original mwem+pgm evaluation method."""
 
     errors: List[float] = []
     for proj in workload:
@@ -80,7 +80,7 @@ def _compute_workload_error(
 
 
 def _clique_set_size(domain, cliques: Iterable[Tuple[str, ...]]) -> float:
-    """Return the size of the graph model corresponding to the clique set."""
+    """Return the size of the graphical model corresponding to the clique set, avoiding redundant code."""
 
     cliques_list = list(cliques)
     if not cliques_list:
@@ -90,13 +90,13 @@ def _clique_set_size(domain, cliques: Iterable[Tuple[str, ...]]) -> float:
 
 
 # =============================
-# MWEM Runner Encapsulation
-# =============================
+# MWEM Runner
+# ==============================
 
 
 @dataclass
 class MWEMState:
-    """Encapsulate MWEM iteration state for phase switching and replay."""
+    """Encapsulate MWEM iteration state for stage switching and replay."""
 
     measurements: List[Any]
     cliques: List[Tuple[str, ...]]
@@ -105,7 +105,7 @@ class MWEMState:
 
 
 class MWEMPGMRunner:
-    """Single-timestamp data synthesis controller with segmented execution capability."""
+    """Data synthesis controller for a single timestamp, providing split-run capability."""
 
     def __init__(
         self,
@@ -191,7 +191,7 @@ class MWEMPGMRunner:
         temp_save_path: Optional[str] = None,
         temp_load_path: Optional[str] = None,
     ) -> Tuple[MWEMState, List[Tuple[str, ...]], float]:
-        """Execute several rounds of MWEM according to the given budget sequence, returning new state, new cliques, and actual consumed budget."""
+        """Execute multiple MWEM rounds according to the given budget sequence, return new state, newly added cliques, and actual consumed budget."""
 
         if state is None:
             base_measurements: List[Any] = []
@@ -390,30 +390,7 @@ def synthephus_mwem_pgm(
     delta: float = DEFAULT_DELTA,
     max_model_size_mb: float = 25.0,
 ) -> Tuple[str, Optional[str]]:
-    """
-    Synthephus Main Process: Dynamic Budget Allocation, Window Management, and Quality Rollback.
-    
-    This implementation uses an adaptive budget allocation strategy that adjusts privacy budgets
-    based on model complexity growth patterns across timestamps within a sliding window.
-    
-    Args:
-        input_folder: Directory containing timestamped data files (real_1.csv, real_2.csv, ...)
-        epsilon: Total privacy budget
-        w: Sliding window size
-        timestamp_exp: Number of timestamps to process
-        T: Number of MWEM rounds per timestamp
-        domain_path: Path to domain.json file
-        workload: List of attribute combinations to measure
-        pgm_iters: Maximum iterations for PGM inference
-        noise: Noise mechanism ("gaussian" or "laplace")
-        verbose: Enable detailed logging
-        output_dir: Output directory for results
-        delta: Delta parameter for (ε,δ)-DP
-        max_model_size_mb: Maximum model size in MB
-        
-    Returns:
-        (result_path, log_path): Paths to result CSV and optional detailed log
-    """
+    """Synthephus main workflow: dynamic budget, window management, and quality fallback."""
 
     domain_path = domain_path or os.path.join(input_folder, "domain.json")
     if not os.path.exists(domain_path):
@@ -433,7 +410,7 @@ def synthephus_mwem_pgm(
         os.path.join(output_dir, f"synp_log_{utc_tag}.txt") if verbose else None
     )
 
-
+    # V2 strategy implementation
     active_window: Deque[Tuple[int, float]] = deque()
     active_sum = 0.0
 
@@ -450,6 +427,7 @@ def synthephus_mwem_pgm(
     T_back = T - T_front
 
     for t in tqdm(range(1, timestamp_exp + 1), desc="Synthephus timestamp progress"):
+        # Window management
         while active_window and (t - active_window[0][0]) >= w:
             _, removed = active_window.popleft()
             active_sum -= removed
@@ -474,7 +452,7 @@ def synthephus_mwem_pgm(
         prev_model = model_history.get(t - 1)
         prev_cliques = cl_history.get(t - 1, [])
 
-        # Phase A/B/C front half
+        # Stage A/B/C: First half
         if t == 1:
             total_alloc = epsilon / float(max(w, 1))
             per_iter_front = total_alloc / float(max(T, 1))
@@ -501,7 +479,7 @@ def synthephus_mwem_pgm(
         half_size_current = _clique_set_size(first_ds.domain, cl_half)
         available_after_front = max(eps_remain_pre - consumed_front, 0.0)
 
-        # Phase back half budget
+        # Second half budget
         if t == 1 or T_back == 0:
             back_budgets = []
         elif 2 <= t <= w:
@@ -633,7 +611,7 @@ def synthephus_mwem_pgm(
 
 
 # =============================
-# Command Line Interface
+# Command Line Entry
 # =============================
 
 
@@ -644,7 +622,7 @@ def _build_cli() -> argparse.ArgumentParser:
     parser.add_argument("--w", type=int, required=True)
     parser.add_argument("--timestamp_exp", type=int, required=True)
     parser.add_argument("--T", type=int, required=True)
-    parser.add_argument("--domain", help="Path to domain.json file, defaults to input_folder if not provided")
+    parser.add_argument("--domain", help="path to domain.json, defaults to input_folder if not provided")
     parser.add_argument("--pgm_iters", type=int, default=1000)
     parser.add_argument(
         "--noise", choices=["gaussian", "laplace"], default="gaussian"
@@ -680,7 +658,7 @@ def _main() -> None:
             delta=args.delta,
             max_model_size_mb=args.max_model_size_mb,
         )
-        print(f"Baseline results saved to: {path}")
+        print(f"Baseline result saved to: {path}")
     else:
         result_path, log_path = synthephus_mwem_pgm(
             input_folder=args.input_folder,
@@ -696,7 +674,7 @@ def _main() -> None:
             delta=args.delta,
             max_model_size_mb=args.max_model_size_mb,
         )
-        print(f"Synthephus results saved to: {result_path}")
+        print(f"Synthephus result saved to: {result_path}")
         if log_path:
             print(f"Detailed log: {log_path}")
 

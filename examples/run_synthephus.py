@@ -6,7 +6,7 @@ import shutil
 import sys
 from pathlib import Path
 
-# To reuse internal library implementations in the example script, dynamically add project root to sys.path
+# 为了在示例脚本中复用库内实现，这里动态添加项目根目录到 sys.path
 ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
@@ -15,7 +15,7 @@ from synp_mechanisms.synthephus_mwem_pgm import mwem_plain, synthephus_mwem_pgm 
 
 
 def prepare_stream_folder(source_csv: Path, domain_json: Path, target_dir: Path, timestamps: int) -> None:
-    """Split a single CSV into multi-timestamp sample data for quick demonstration."""
+    """Split a single CSV into multi-timestamp sample data for quick experimentation."""
 
     if target_dir.exists():
         shutil.rmtree(target_dir)
@@ -51,24 +51,24 @@ def main() -> None:
     parser.add_argument("--timestamps", type=int, default=5, help="Number of sample timestamps")
     parser.add_argument("--window", type=int, default=3, help="Sliding window size w")
     parser.add_argument("--epsilon", type=float, default=3.0, help="Total privacy budget ε")
-    parser.add_argument("--rounds", type=int, default=30, help="Number of MWEM rounds T per timestamp")
+    parser.add_argument("--rounds", type=int, default=30, help="MWEM rounds T per timestamp")
     parser.add_argument(
         "--source_csv",
         type=Path,
         default=ROOT_DIR / "data" / "colorado.csv",
-        help="Original CSV file to construct sample timestamp data",
+        help="Original CSV for constructing sample timestamp data",
     )
     parser.add_argument(
         "--domain_json",
         type=Path,
         default=ROOT_DIR / "data" / "colorado.json",
-        help="domain.json file corresponding to source CSV",
+        help="Domain.json corresponding to source CSV",
     )
     parser.add_argument(
         "--workdir",
         type=Path,
         default=ROOT_DIR / "examples" / "demo_stream",
-        help="Cache directory for generated real_x.csv files",
+        help="Cache directory for generated real_x.csv",
     )
     parser.add_argument(
         "--output_dir",
@@ -79,7 +79,7 @@ def main() -> None:
     parser.add_argument(
         "--run_baseline",
         action="store_true",
-        help="Also run mwem_plain baseline for comparison",
+        help="Also run mwem_plain for comparison",
     )
     args = parser.parse_args()
 
@@ -96,7 +96,7 @@ def main() -> None:
         verbose=True,
     )
 
-    print(f"Synthephus results: {result_path}")
+    print(f"Synthephus result: {result_path}")
     if log_path:
         print(f"Detailed log: {log_path}")
 
@@ -110,7 +110,7 @@ def main() -> None:
             domain_path=str(args.workdir / "domain.json"),
             output_dir=str(args.output_dir),
         )
-        print(f"mwem_plain baseline results: {baseline_path}")
+        print(f"mwem_plain baseline result: {baseline_path}")
 
 
 if __name__ == "__main__":
