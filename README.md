@@ -39,14 +39,28 @@ These implementations have additional dependencies: [Ektelo](https://github.com/
 * **data/** - Contains datasets and domain specifications
 
 ## Installation
+1. Before getting started, it is recommended to run the `setup_uv.py` script to configure the `uv` environment:
+```bash
+python setup_uv.py
+```
+This script:
+- Due to compatibility issues with the autodp library, this project includes a packaged version of autodp and uses this script to modify the uv configuration to import this package.
+- Additionally, the script redirects the `uv/cache` directory.
+If you choose to skip this step, please ensure that the `autodp` package with a version `<=0.2.0` is installed in your Python environment.
 
-1. Ensure you have Python 3.7 or higher installed.
 
-2. Install the required dependencies:
+2. This project uses `uv` to manage dependencies and execution environment. On first use, please run:
 
 ```bash
-pip install -r requirements.txt
+uv sync
 ```
+
+If you do not have `uv` installed, you can install it via pip:
+
+```bash
+pip install uv
+```
+
 
 3. Export the `src` directory to your Python path. For example, in PowerShell on Windows:
 
@@ -67,7 +81,7 @@ export PYTHONPATH="${PYTHONPATH}:/path/to/Synthephus_release/src"
 The easiest way to get started is to use the provided example runner:
 
 ```bash
-python examples/run_synthephus.py --timestamps 5 --window 3 --epsilon 3.0 --rounds 30
+uv run examples/run_synthephus.py --timestamps 5 --window 3 --epsilon 3.0 --rounds 30
 ```
 
 This will:
@@ -133,7 +147,7 @@ Both mechanisms can also be run directly from the command line:
 
 ```bash
 # Synthephus-AIM
-python synp_mechanisms/synthephus_aim.py \
+uv run synp_mechanisms/synthephus_aim.py \
     --input_folder data/stream \
     --epsilon 3.0 \
     --w 3 \
@@ -142,7 +156,7 @@ python synp_mechanisms/synthephus_aim.py \
     --verbose
 
 # Synthephus-MWEM
-python synp_mechanisms/synthephus_mwem_pgm.py \
+uv run synp_mechanisms/synthephus_mwem_pgm.py \
     --input_folder data/stream \
     --epsilon 3.0 \
     --w 3 \
@@ -190,38 +204,18 @@ The algorithms generate CSV files containing:
 
 Optional detailed logs (when `verbose=True`) provide per-iteration information including selected cliques, budget consumption, and model quality metrics.
 
-## Algorithm Overview
-
-### Adaptive Budget Allocation
-
-Synthephus employs a three-phase budget allocation strategy:
-
-1. **Phase A (Timestamp 1)**: Initialize with equal budget allocation
-2. **Phase B (Timestamps 2 to w)**: Adaptive allocation based on initial model growth
-3. **Phase C (Timestamps w+1 onwards)**: Full adaptive allocation with historical window analysis
-
-The key innovation is using model complexity (measured by clique set size) as a predictor for budget requirements, allowing more efficient budget utilization across the stream.
-
-### Quality Assurance
-
-Synthephus includes an automatic quality comparison mechanism:
-- Compares workload error of new model vs. previous model
-- Automatically rolls back to previous model if quality degrades
-- Reclaims unused budget when rollback occurs
-
-This ensures monotonic quality improvement throughout the data stream.
 
 ## Citation
 
 If you use this code in your research, please cite:
 
 ```
-[Citation information to be added]
+[Citation information Citation information is not added since this work is under anonymous review]
 ```
 
 ## License
 
-[License information to be added]
+[License information Citation information is not added since this work is under anonymous review]
 
 ## Contact
 
