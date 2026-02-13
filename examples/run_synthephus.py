@@ -6,7 +6,7 @@ import shutil
 import sys
 from pathlib import Path
 
-# 为了在示例脚本中复用库内实现，这里动态添加项目根目录到 sys.path
+# To allow importing library code in this example script, we dynamically add the project root to sys.path
 ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))

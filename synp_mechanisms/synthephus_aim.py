@@ -87,10 +87,51 @@ def filter_candidates(candidates, model, size_limit):
     return ans
 
 
+def resyn_measurements(
+    measurements: List[Tuple[Any, np.ndarray, float, Tuple[str, ...]]],
+    engine: FactoredInference,
+    domain: Any,
+    total: Optional[int] = None,
+) -> GraphicalModel:
+    """
+    基于给定的 measurements 重新随机排序并估计新模型。
+    
+    Args:
+        measurements: 观测值列表，每个元素为 (Q, y, sigma, clique) 元组
+        engine: 图模型推理引擎 (FactoredInference 实例)
+        domain: 数据域定义
+        total: 记录总数（用于 MWEM+PGM 的有界 DP 模式）
+    
+    Returns:
+        resyn_model: 重新估计的图模型
+    """
+    # 随机重新排序 measurements 列表
+    shuffled_measurements = list(measurements)
+    np.random.shuffle(shuffled_measurements)
+    
+    # 使用重新排序的 measurements 估计新模型
+    resyn_model = engine.estimate(shuffled_measurements)
+    return resyn_model
+
+
 def _compute_workload_error(
-    data: Dataset, est: GraphicalModel, workload: Iterable[Tuple[str, ...]]
+    data: Dataset, 
+    est: GraphicalModel, 
+    workload: Iterable[Tuple[str, ...]],
+    rho_comp: Optional[float] = None,
 ) -> float:
-    """Compute workload error using the original AIM evaluation method"""
+    """
+    计算工作负载误差，可选注入差分隐私高斯噪声。
+    
+    Args:
+        data: 真实数据集
+        est: 估计的图模型
+        workload: 工作负载（投影列表）
+        rho_comp: 若不为 None，则对最终误差注入尺度为 rho_comp 的高斯噪声
+    
+    Returns:
+        误差值（可能包含噪声）
+    """
     errors: List[float] = []
     for proj in workload:
         X = data.project(proj).datavector().astype(float)
@@ -100,7 +141,16 @@ def _compute_workload_error(
             continue
         e = 0.5 * np.linalg.norm(X / X.sum() - Y / Y.sum(), 1)
         errors.append(float(e))
-    return float(np.mean(errors)) if errors else 0.0
+    
+    error = float(np.mean(errors)) if errors else 0.0
+    
+    # 若指定了 rho_comp，注入差分隐私噪声
+    if rho_comp is not None and rho_comp > 0:
+        sigma_err = np.sqrt(1.0 / (2.0 * rho_comp))
+        noise = np.random.normal(0, sigma_err)
+        error = error + noise
+    
+    return error
 
 
 def _clique_set_size(domain, cliques: Iterable[Tuple[str, ...]]) -> float:
@@ -347,12 +397,12 @@ class AIMRunner:
             rho_step = 1.0 / 8 * epsilon ** 2 + 0.5 / sigma ** 2
             size_limit = self.max_model_size * (rho_used_before + rho_consumed + rho_step) / total_rho
 
-            # 过滤候选 clique
+            # Filter clique
             small_candidates = filter_candidates(self.candidates, est, size_limit)
             if not small_candidates:
                 break
 
-            # 选择最差近似的 clique
+            # Select the worst approximated clique
             cl = self._worst_approximated(small_candidates, est, epsilon, sigma)
             if cl is None:
                 break
@@ -366,7 +416,7 @@ class AIMRunner:
             cliques.append(cl)
             z = est.project(cl).datavector()
 
-            # 更新模型
+            # Update model
             est = self.engine.estimate(measurements)
             w = est.project(cl).datavector()
 
@@ -647,6 +697,7 @@ def synthephus_aim(
     T_trunc_history: Dict[int, int] = {}  # T_trunc per timestamp
     T_final_history: Dict[int, int] = {}  # T final per timestamp
     T_init_value: Optional[int] = None
+    mea_history: Optional[List[Any]] = None  # 观测历史记录
 
     results: List[Dict[str, Any]] = []
 
@@ -692,6 +743,7 @@ def synthephus_aim(
             actual_consumed[t] = alloc_eps
             allocated_total = alloc_eps
             actual_total = alloc_eps
+            rho_err = 0.0  # 第一个时间戳不需要误差计算预算
             
             # For first timestamp, trunc and final are the same
             size_final = _clique_set_size(first_ds.domain, state_final.cliques)
@@ -699,6 +751,9 @@ def synthephus_aim(
             T_final_sizes[t] = size_final
             T_trunc_history[t] = T_init_value or 0
             T_final_history[t] = T_init_value or 0
+            
+            # 初始化 mea_history
+            mea_history = list(state_final.measurements)
 
         # ========== Stage B: Timestamp 2 to w ==========
         elif 2 <= t <= w:
@@ -738,10 +793,14 @@ def synthephus_aim(
             base_back_eps = min(base_back_eps, available_after_front)
             base_back_rho = cdp_rho(base_back_eps, delta) if base_back_eps > 0 else 0.0
 
-            if base_back_rho > 0:
+            # 计算误差计算预算并从 base_back_rho 中扣除
+            rho_err = 0.1 * base_back_rho
+            base_back_rho_remaining = base_back_rho - rho_err
+
+            if base_back_rho_remaining > 0:
                 # Use eps_remain / (w - i) as reference to calculate initial sigma
                 state_final, _, rho_back, T_final = runner.run_adaptive(
-                    base_back_rho,
+                    base_back_rho_remaining,
                     state_temp,
                     total_rho=cdp_rho(eps_remain_pre / float(denom), delta),
                     temp_load_path=temp_file,
@@ -751,6 +810,7 @@ def synthephus_aim(
                 state_final = state_temp
                 eps_back = 0.0
                 T_final = actual_trunc
+                rho_err = 0.0  # 如果没有剩余预算，则不消耗误差计算预算
 
             if temp_file and os.path.exists(temp_file):
                 os.remove(temp_file)
@@ -833,10 +893,14 @@ def synthephus_aim(
             base_back_eps = min(base_back_eps, available_after_front)
             base_back_rho = cdp_rho(base_back_eps, delta) if base_back_eps > 0 else 0.0
 
-            if base_back_rho > 0:
+            # 计算误差计算预算并从 base_back_rho 中扣除
+            rho_err = 0.1 * base_back_rho
+            base_back_rho_remaining = base_back_rho - rho_err
+
+            if base_back_rho_remaining > 0:
                 # Use eps_remain as reference to calculate initial sigma
                 state_final, _, rho_back, T_final = runner.run_adaptive(
-                    base_back_rho,
+                    base_back_rho_remaining,
                     state_temp,
                     total_rho=cdp_rho(eps_remain_pre, delta),
                     temp_load_path=temp_file,
@@ -846,6 +910,7 @@ def synthephus_aim(
                 state_final = state_temp
                 eps_back = 0.0
                 T_final = actual_trunc
+                rho_err = 0.0  # 如果没有剩余预算，则不消耗误差计算预算
 
             if temp_file and os.path.exists(temp_file):
                 os.remove(temp_file)
@@ -861,16 +926,28 @@ def synthephus_aim(
         # ========== Quality assurance mechanism ==========
         if t > 1:
             if prev_model is None:
-                err_prev = float("inf")
+                err_prev_noisy = float("inf")
             else:
-                err_prev = _compute_workload_error(data, prev_model, workload)
-            err_curr = _compute_workload_error(data, state_final.est, workload)
+                # \u4f7f\u7528\u542b\u566a\u58f0\u7684\u8bef\u5dee\u8ba1\u7b97
+                err_prev_noisy = _compute_workload_error(data, prev_model, workload, rho_comp=rho_err/2)
+            # \u4f7f\u7528\u542b\u566a\u58f0\u7684\u8bef\u5dee\u8ba1\u7b97
+            err_curr_noisy = _compute_workload_error(data, state_final.est, workload, rho_comp=rho_err/2)
 
-            if prev_model is not None and err_prev < err_curr:
-                # Model fallback
-                actual_total = 0.0
+            if prev_model is not None and err_prev_noisy < err_curr_noisy:
+                # Model fallback \u89e6\u53d1
+                actual_total = rho_err  # \u53ea\u6d88\u8017\u8bef\u5dee\u8ba1\u7b97\u9884\u7b97
                 final_cliques = prev_cliques
-                final_model = prev_model
+                
+                # \u4f7f\u7528 ReSyn \u91cd\u65b0\u4f30\u8ba1\u6a21\u578b
+                if mea_history is not None:
+                    final_model = resyn_measurements(
+                        mea_history, runner.engine, data.domain
+                    )
+                else:
+                    final_model = prev_model
+                
+                # mea_history \u4e0d\u66f4\u65b0\uff0c\u4fdd\u7559\u4e0a\u6b21\u6709\u6548\u65f6\u95f4\u6233\u7684\u5386\u53f2
+                
                 # Round records also fall back
                 T_trunc_used = T_trunc_history.get(t - 1, actual_trunc if t > 1 else 0)
                 T_final_used = T_final_history.get(t - 1, T_final)
@@ -878,8 +955,13 @@ def synthephus_aim(
                 T_final_size_used = T_final_sizes.get(t - 1, T_final_sizes.get(t, 0.0))
             else:
                 # No fallback, use current model
+                actual_total = allocated_total
                 final_cliques = list(state_final.cliques)
                 final_model = state_final.est
+                
+                # \u66f4\u65b0 mea_history
+                mea_history = list(state_final.measurements)
+                
                 T_trunc_used = actual_trunc if t > 1 else T_trunc_history.get(t, 0)
                 T_final_used = T_final
                 T_trunc_size_used = size_trunc if t > 1 else T_trunc_sizes.get(t, 0.0)

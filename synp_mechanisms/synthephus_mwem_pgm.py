@@ -39,6 +39,33 @@ DEFAULT_DELTA = 1e-9
 ALPHA = 0.9
 
 
+def resyn_measurements(
+    measurements: List[Tuple[Any, np.ndarray, float, Tuple[str, ...]]],
+    engine: FactoredInference,
+    domain: Any,
+    total: Optional[int] = None,
+) -> GraphicalModel:
+    """
+    基于给定的 measurements 重新随机排序并估计新模型。
+    
+    Args:
+        measurements: 观测值列表，每个元素为 (Q, y, sigma, clique) 元组
+        engine: 图模型推理引擎 (FactoredInference 实例)
+        domain: 数据域定义
+        total: 记录总数（用于 MWEM+PGM 的有界 DP 模式）
+    
+    Returns:
+        resyn_model: 重新估计的图模型
+    """
+    # 随机重新排序 measurements 列表
+    shuffled_measurements = list(measurements)
+    np.random.shuffle(shuffled_measurements)
+    
+    # 使用重新排序的 measurements 估计新模型
+    resyn_model = engine.estimate(shuffled_measurements, total)
+    return resyn_model
+
+
 def _worst_approximated(
     workload_answers: Dict[Tuple[str, ...], np.ndarray],
     est: GraphicalModel,
@@ -63,10 +90,23 @@ def _worst_approximated(
 
 
 def _compute_workload_error(
-    data: Dataset, est: GraphicalModel, workload: Iterable[Tuple[str, ...]]
+    data: Dataset, 
+    est: GraphicalModel, 
+    workload: Iterable[Tuple[str, ...]],
+    rho_comp: Optional[float] = None,
 ) -> float:
-    """Compute workload error using the original mwem+pgm evaluation method."""
-
+    """
+    计算工作负载误差，可选注入差分隐私高斯噪声。
+    
+    Args:
+        data: 真实数据集
+        est: 估计的图模型
+        workload: 工作负载（投影列表）
+        rho_comp: 若不为 None，则对最终误差注入尺度为 rho_comp 的高斯噪声
+    
+    Returns:
+        误差值（可能包含噪声）
+    """
     errors: List[float] = []
     for proj in workload:
         X = data.project(proj).datavector().astype(float)
@@ -76,7 +116,16 @@ def _compute_workload_error(
             continue
         e = 0.5 * np.linalg.norm(X / X.sum() - Y / Y.sum(), 1)
         errors.append(float(e))
-    return float(np.mean(errors)) if errors else 0.0
+    
+    error = float(np.mean(errors)) if errors else 0.0
+    
+    # 若指定了 rho_comp，注入差分隐私噪声
+    if rho_comp is not None and rho_comp > 0:
+        sigma_err = np.sqrt(1.0 / (2.0 * rho_comp))
+        noise = np.random.normal(0, sigma_err)
+        error = error + noise
+    
+    return error
 
 
 def _clique_set_size(domain, cliques: Iterable[Tuple[str, ...]]) -> float:
@@ -410,7 +459,7 @@ def synthephus_mwem_pgm(
         os.path.join(output_dir, f"synp_log_{utc_tag}.txt") if verbose else None
     )
 
-    # V2 strategy implementation
+    # Current strategy (as described in Section V) implementatsion
     active_window: Deque[Tuple[int, float]] = deque()
     active_sum = 0.0
 
@@ -420,6 +469,7 @@ def synthephus_mwem_pgm(
     allocated: Dict[int, float] = {}
     half_sizes: Dict[int, float] = {}
     full_sizes: Dict[int, float] = {}
+    mea_history: Optional[List[Any]] = None  # 观测历史记录
 
     results: List[Dict[str, Any]] = []
 
@@ -518,6 +568,21 @@ def synthephus_mwem_pgm(
             allowed_back = min(planned_back, available_after_front)
             ratio = 0.0 if planned_back <= EPS_FLOOR else allowed_back / planned_back
             back_budgets = [b * ratio for b in back_budgets]
+        
+        # 计算误差计算预算并从 back_budgets 中扣除
+        if back_budgets:
+            total_back = sum(back_budgets)
+            rho_err = 2 * (total_back / (T_back + 2))
+            remaining = total_back - rho_err
+            
+            if remaining > 0:
+                ratio = remaining / total_back
+                back_budgets = [b * ratio for b in back_budgets]
+            else:
+                back_budgets = []
+                rho_err = 0.0  # 如果没有剩余预算，则不消耗误差计算预算
+        else:
+            rho_err = 0.0  # 如果没有 back_budgets，则不消耗误差计算预算
 
         consumed_back = 0.0
         state_full = state_front
@@ -534,23 +599,44 @@ def synthephus_mwem_pgm(
             full_size_used = full_sizes.get(
                 t - 1, _clique_set_size(first_ds.domain, prev_cliques)
             )
+            # mea_history 不更新
         else:
             if prev_model is None:
-                err_prev = float("inf")
+                err_prev_noisy = float("inf")
             else:
-                err_prev = _compute_workload_error(data, prev_model, workload)
-            err_curr = _compute_workload_error(data, state_full.est, workload)
-            if prev_model is not None and err_prev < err_curr:
-                actual_total = 0.0
+                # 使用含噪声的误差计算
+                err_prev_noisy = _compute_workload_error(data, prev_model, workload, rho_comp=rho_err/2)
+            # 使用含噪声的误差计算
+            err_curr_noisy = _compute_workload_error(data, state_full.est, workload, rho_comp=rho_err/2)
+            
+            if prev_model is not None and err_prev_noisy < err_curr_noisy:
+                # Fallback 触发
+                actual_total = rho_err  # 只消耗误差计算预算
                 final_cliques = prev_cliques
-                final_model = prev_model
+                
+                # 使用 ReSyn 重新估计模型
+                if mea_history is not None:
+                    final_model = resyn_measurements(
+                        mea_history, runner.engine, data.domain, runner.total
+                    )
+                else:
+                    final_model = prev_model
+                
+                # mea_history 不更新，保留上次有效时间戳的历史
+                
                 half_size_used = half_sizes.get(t - 1, half_size_current)
                 full_size_used = full_sizes.get(
                     t - 1, _clique_set_size(first_ds.domain, prev_cliques)
                 )
             else:
+                # 未触发 Fallback
+                actual_total = consumed_front + consumed_back
                 final_cliques = list(state_full.cliques)
                 final_model = state_full.est
+                
+                # 更新 mea_history
+                mea_history = list(state_full.measurements)
+                
                 half_size_used = half_size_current
                 full_size_used = _clique_set_size(first_ds.domain, final_cliques)
 
